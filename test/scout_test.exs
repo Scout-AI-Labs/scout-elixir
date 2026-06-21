@@ -93,4 +93,53 @@ defmodule ScoutTest do
     assert Scout.Pagination.extract_items([1, 2]) == [1, 2]
     assert Scout.Pagination.extract_items(%{"x" => 1}) == []
   end
+
+  test "chat completions stream yields deltas", %{bypass: bypass, client: client} do
+    Bypass.expect_once(bypass, "POST", "/v1/chat/completions", fn conn ->
+      body =
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n" <>
+          "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" <>
+          "data: [DONE]\n\n"
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/event-stream")
+      |> Plug.Conn.resp(200, body)
+    end)
+
+    {:ok, agent} = Agent.start_link(fn -> [] end)
+
+    assert :ok =
+             Scout.Chat.Completions.stream(
+               client,
+               %{messages: [%{role: "user", content: "hi"}]},
+               fn chunk ->
+                 content = chunk["choices"] |> hd() |> get_in(["delta", "content"])
+                 Agent.update(agent, &(&1 ++ [content]))
+               end
+             )
+
+    assert Agent.get(agent, & &1) == ["Hel", "lo"]
+  end
+
+  test "stream_events yields parsed events", %{bypass: bypass, client: client} do
+    Bypass.expect_once(bypass, "GET", "/v1/searches/abc/events", fn conn ->
+      body =
+        ": keepalive\n\n" <>
+          "event: run.progress\ndata: {\"type\":\"run.progress\"}\n\n" <>
+          "event: run.completed\ndata: {\"type\":\"run.completed\"}\n\n"
+
+      conn
+      |> Plug.Conn.put_resp_header("content-type", "text/event-stream")
+      |> Plug.Conn.resp(200, body)
+    end)
+
+    {:ok, agent} = Agent.start_link(fn -> [] end)
+
+    assert :ok =
+             Scout.Search.stream_events(client, "abc", fn e ->
+               Agent.update(agent, &(&1 ++ [e["type"]]))
+             end)
+
+    assert Agent.get(agent, & &1) == ["run.progress", "run.completed"]
+  end
 end

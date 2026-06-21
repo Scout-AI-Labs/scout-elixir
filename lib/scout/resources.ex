@@ -18,6 +18,10 @@ defmodule Scout.Search do
   def get(client, id), do: Client.request(client, :get, "/v1/searches/#{id}")
   def cancel(client, id), do: Client.request(client, :post, "/v1/searches/#{id}/cancel")
   def events(client, id), do: Client.request(client, :get, "/v1/searches/#{id}/events")
+
+  @doc "Stream a deep-search run's progress events live (SSE)."
+  def stream_events(client, id, on_event),
+    do: Client.stream_json(client, :get, "/v1/searches/#{id}/events", [], on_event)
 end
 
 defmodule Scout.Page do
@@ -93,6 +97,10 @@ defmodule Scout.Lists.Runs do
     do: Client.request(client, :post, "/v1/lists/runs/#{id}/extend", json: body)
 
   def events(client, id), do: Client.request(client, :get, "/v1/lists/runs/#{id}/events")
+
+  @doc "Stream a find-all run's progress events live (SSE)."
+  def stream_events(client, id, on_event),
+    do: Client.stream_json(client, :get, "/v1/lists/runs/#{id}/events", [], on_event)
 end
 
 defmodule Scout.Products do
@@ -128,6 +136,10 @@ defmodule Scout.Jobs do
   def start_run(client, body \\ %{}), do: Client.request(client, :post, "/v1/jobs/runs", json: body)
   def run_result(client, id), do: Client.request(client, :get, "/v1/jobs/runs/#{id}")
   def run_events(client, id), do: Client.request(client, :get, "/v1/jobs/runs/#{id}/events")
+
+  @doc "Stream a job's progress events live (SSE)."
+  def stream_events(client, id, on_event),
+    do: Client.stream_json(client, :get, "/v1/jobs/#{id}/events", [], on_event)
 end
 
 defmodule Scout.Monitors do
@@ -150,6 +162,10 @@ defmodule Scout.Monitors do
   def resume(client, id), do: Client.request(client, :post, "/v1/monitors/#{id}/resume")
   def run(client, id), do: Client.request(client, :post, "/v1/monitors/#{id}/run")
   def events(client, id), do: Client.request(client, :get, "/v1/monitors/#{id}/events")
+
+  @doc "Stream a monitor's events live (SSE)."
+  def stream_events(client, id, on_event),
+    do: Client.stream_json(client, :get, "/v1/monitors/#{id}/events", [], on_event)
 end
 
 defmodule Scout.Chat.Completions do
@@ -158,6 +174,16 @@ defmodule Scout.Chat.Completions do
 
   def create(client, params),
     do: Client.request(client, :post, "/v1/chat/completions", json: params)
+
+  @doc """
+  Stream a chat completion as OpenAI-style chunks. `on_chunk` is called with
+  each decoded chunk map; read token text from
+  `chunk["choices"][0]["delta"]["content"]`.
+  """
+  def stream(client, params, on_chunk) do
+    body = Map.put(params, :stream, true)
+    Client.stream_json(client, :post, "/v1/chat/completions", [json: body], on_chunk)
+  end
 end
 
 defmodule Scout.Chat do

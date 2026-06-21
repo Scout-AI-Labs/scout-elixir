@@ -106,6 +106,28 @@ client = Scout.new(timeout: 30_000, max_retries: 4)
 {:ok, runs} = Scout.Search.list_all(client)
 ```
 
+## Streaming
+
+Stream chat completions and live run progress (search, jobs, find-all, monitors). Both take a callback invoked per chunk/event:
+
+```elixir
+# Token-by-token chat
+Scout.Chat.Completions.stream(
+  client,
+  %{messages: [%{role: "user", content: "Summarize EU AI regulation."}]},
+  fn chunk ->
+    IO.write(chunk["choices"] |> hd() |> get_in(["delta", "content"]) || "")
+  end
+)
+
+# Live progress events from a deep-search run
+Scout.Search.stream_events(client, search_id, fn event ->
+  IO.puts(event["type"])
+end)
+```
+
+`stream_events` is also available on `Scout.Jobs`, `Scout.Lists.Runs`, and `Scout.Monitors`.
+
 ## Versioning
 
 This SDK follows [SemVer](https://semver.org/) and sends the targeted Scout API version on every request; see [`CHANGELOG.md`](./CHANGELOG.md). API reference renders on [HexDocs](https://hexdocs.pm/scout_sdk).

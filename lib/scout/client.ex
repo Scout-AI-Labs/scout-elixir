@@ -61,6 +61,114 @@ defmodule Scout.Client do
     do_request(client, method, path, body, params, idempotency_key, 0)
   end
 
+  @doc false
+  @spec stream(t(), atom(), String.t(), keyword(), (String.t() -> any())) ::
+          :ok | {:error, Error.t()}
+  def stream(%__MODULE__{} = client, method, path, opts, on_data) do
+    body = opts[:json]
+
+    collector = fn {:data, data}, {req, resp} ->
+      if resp.status in 200..299 do
+        buffer = Req.Response.get_private(resp, :sse_buf, "")
+        buffer = emit_events(buffer <> String.replace(data, "\r\n", "\n"), on_data)
+        {:cont, {req, Req.Response.put_private(resp, :sse_buf, buffer)}}
+      else
+        eb = Req.Response.get_private(resp, :err_buf, "")
+        {:cont, {req, Req.Response.put_private(resp, :err_buf, eb <> data)}}
+      end
+    end
+
+    req_opts =
+      [
+        method: method,
+        url: client.base_url <> path,
+        headers: stream_headers(client, method != :get),
+        retry: false,
+        into: collector
+      ]
+      |> maybe_put(:json, body)
+
+    case Req.request(req_opts) do
+      {:ok, %Req.Response{status: status} = resp} when status in 200..299 ->
+        leftover = Req.Response.get_private(resp, :sse_buf, "")
+
+        case parse_block(leftover) do
+          nil -> :ok
+          data -> on_data.(data)
+        end
+
+        :ok
+
+      {:ok, %Req.Response{status: status} = resp} ->
+        raw = Req.Response.get_private(resp, :err_buf, "")
+        {:error, Error.from_response(status, decode_or(raw), %{})}
+
+      {:error, exception} ->
+        {:error, Error.connection(Exception.message(exception))}
+    end
+  end
+
+  @doc false
+  @spec stream_json(t(), atom(), String.t(), keyword(), (map() -> any())) ::
+          :ok | {:error, Error.t()}
+  def stream_json(client, method, path, opts, on_event) do
+    stream(client, method, path, opts, fn data ->
+      unless data == "[DONE]" do
+        on_event.(Jason.decode!(data))
+      end
+    end)
+  end
+
+  defp stream_headers(client, is_write) do
+    base = [
+      {"authorization", "Bearer " <> client.api_key},
+      {"accept", "text/event-stream"},
+      {"user-agent", "scout-elixir/" <> @sdk_version},
+      {"scout-version", @api_version}
+    ]
+
+    if is_write, do: [{"idempotency-key", gen_id()} | base], else: base
+  end
+
+  defp emit_events(buffer, on_data) do
+    case String.split(buffer, "\n\n", parts: 2) do
+      [block, rest] ->
+        case parse_block(block) do
+          nil -> :ok
+          data -> on_data.(data)
+        end
+
+        emit_events(rest, on_data)
+
+      [_incomplete] ->
+        buffer
+    end
+  end
+
+  defp parse_block(block) do
+    data =
+      block
+      |> String.split("\n")
+      |> Enum.filter(&String.starts_with?(&1, "data:"))
+      |> Enum.map(fn line ->
+        line |> String.replace_prefix("data:", "") |> String.replace_prefix(" ", "")
+      end)
+
+    case data do
+      [] -> nil
+      lines -> Enum.join(lines, "\n")
+    end
+  end
+
+  defp decode_or(""), do: nil
+
+  defp decode_or(raw) do
+    case Jason.decode(raw) do
+      {:ok, value} -> value
+      {:error, _} -> raw
+    end
+  end
+
   defp do_request(client, method, path, body, params, idem, attempt) do
     case attempt_once(client, method, path, body, params, idem) do
       {:ok, result} ->
